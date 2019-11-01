@@ -639,3 +639,10 @@ class MusicLibrary(object):
         self.contentDirectory.DestroyObject([
             ('ObjectID', share_name)
         ])
+
+    # Has form: CreateObject(ContainerID: string, Elements: string) -> {ObjectID: string, Result: string}
+    def add_library_share(self, share_name, username='', password=''):
+        self.contentDirectory.CreateObject([
+            ('ContainerID', share_name),
+            ('Elements', username + password)
+        ])
