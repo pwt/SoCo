@@ -25,7 +25,7 @@ def discover(timeout=5, include_invisible=False, interface_addr=None):
     Return a set of `SoCo` instances for each zone found.
     Include invisible zones (bridges and slave zones in stereo pairs if
     ``include_invisible`` is `True`. Will block for up to ``timeout`` seconds,
-     after which return `None` if no zones found.
+    after which return `None` if no zones found.
 
     Args:
         timeout (int, optional): block for this many seconds, at most.
@@ -42,7 +42,7 @@ def discover(timeout=5, include_invisible=False, interface_addr=None):
             `None`.
     Returns:
         set: a set of `SoCo` instances, one for each zone found, or else
-            `None`.
+        `None`.
 
     Note:
         There is no easy cross-platform way to find out the addresses of the
@@ -97,10 +97,10 @@ def discover(timeout=5, include_invisible=False, interface_addr=None):
     if interface_addr is not None:
         try:
             address = socket.inet_aton(interface_addr)
-        except socket.error:
+        except socket.error as e:
             raise ValueError(
                 "{0} is not a valid IP address string".format(interface_addr)
-            )
+            ) from e
         _sockets.append(create_socket(interface_addr))
         _LOG.info("Sending discovery packets on default interface")
     else:
@@ -201,7 +201,7 @@ def any_soco():
 
     Returns:
         SoCo: A `SoCo` instance (or subclass if `config.SOCO_CLASS` is set,
-            or `None` if no instances are found
+        or `None` if no instances are found
     """
 
     cls = config.SOCO_CLASS
@@ -229,7 +229,7 @@ def by_name(name):
 
     Returns:
         :class:`~.SoCo`: The first device encountered among all zone with the
-            given player name. If none are found `None` is returned.
+        given player name. If none are found `None` is returned.
     """
     devices = discover()
     if devices is None:
