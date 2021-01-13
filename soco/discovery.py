@@ -16,7 +16,6 @@ import ifaddr
 
 from . import config
 from .utils import really_utf8
-from . import core
 
 _LOG = logging.getLogger(__name__)
 
@@ -45,9 +44,9 @@ def discover(
         interface_addr (str or None): Discovery operates by sending UDP
             multicast datagrams. ``interface_addr`` is a string (dotted
             quad) representation of the network interface address to use as
-            the source of the datagrams (i.e. it is a value for
+            the source of the datagrams (i.e., it is a value for
             `socket.IP_MULTICAST_IF <socket>`). If `None` or not specified,
-            the system default interface for UDP multicast messages will be
+            the system default interface(s) for UDP multicast messages will be
             used. This is probably what you want to happen. Defaults to
             `None`.
         allow_network_scan (bool, optional): If normal discovery fails, fall
@@ -58,25 +57,10 @@ def discover(
     Returns:
         set: a set of `SoCo` instances, one for each zone found, or else
         `None`.
-
-    Note:
-        There is no easy cross-platform way to find out the addresses of the
-        local machine's network interfaces. You might try the
-        `netifaces module <https://pypi.python.org/pypi/netifaces>`_ and some
-        code like this:
-
-            >>> from netifaces import interfaces, AF_INET, ifaddresses
-            >>> data = [ifaddresses(i) for i in interfaces()]
-            >>> [d[AF_INET][0]['addr'] for d in data if d.get(AF_INET)]
-            ['127.0.0.1', '192.168.1.20']
-
-            This should provide you with a list of values to try for
-            interface_addr if you are having trouble finding your Sonos devices
-
     """
 
-    def create_socket(interface_addr=None):
-        """A helper function for creating a socket for discover purposes.
+    def create_socket(interface_addr):
+        """A helper function for creating a socket for discovery purposes.
 
         Create and return a socket with appropriate options set for multicast.
         """
@@ -86,12 +70,9 @@ def discover(
         _sock.setsockopt(
             socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack("B", 4)
         )
-        if interface_addr is not None:
-            _sock.setsockopt(
-                socket.IPPROTO_IP,
-                socket.IP_MULTICAST_IF,
-                socket.inet_aton(interface_addr),
-            )
+        _sock.setsockopt(
+            socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(interface_addr)
+        )
         return _sock
 
     # pylint: disable=invalid-name
@@ -117,21 +98,10 @@ def discover(
                 "{0} is not a valid IP address string".format(interface_addr)
             ) from e
         _sockets.append(create_socket(interface_addr))
-        _LOG.info("Sending discovery packets on default interface")
+        _LOG.info("Sending discovery packets on specified interface")
     else:
-        # Find the local network address using a couple of different methods.
-        # Create a socket for each unique address found, and one for the
-        # default multicast address
-        addresses = set()
-        try:
-            addresses.add(socket.gethostbyname(socket.gethostname()))
-        except socket.error:
-            pass
-        try:
-            addresses.add(socket.gethostbyname(socket.getfqdn()))
-        except socket.error:
-            pass
-        for address in addresses:
+        # Use all relevant network interfaces
+        for address in _find_ipv4_addresses():
             try:
                 _sockets.append(create_socket(address))
             except socket.error as e:
@@ -141,12 +111,6 @@ def discover(
                     e.__class__.__name__,
                     e,
                 )
-        # Add a socket using the system default address
-        _sockets.append(create_socket())
-        # Used to be logged as:
-        # list(s.getsockname()[0] for s in _sockets)
-        # but getsockname fails on Windows with unconnected unbound sockets
-        # https://bugs.python.org/issue1049
         _LOG.info("Sending discovery packets on %s", _sockets)
 
     for _ in range(0, 3):
@@ -229,7 +193,7 @@ def any_soco(allow_network_scan=False, **network_scan_kwargs):
 
     Returns:
         SoCo: A `SoCo` instance (or subclass if `config.SOCO_CLASS` is set),
-        or `None` if no instances are found
+        or `None` if no instances are found.
     """
 
     cls = config.SOCO_CLASS
@@ -262,7 +226,7 @@ def by_name(name, allow_network_scan=False, **network_scan_kwargs):
 
     Returns:
         SoCo: A `SoCo` instance (or subclass if `config.SOCO_CLASS` is set),
-        or `None` if no instances are found
+        or `None` if no instances are found.
     """
     devices = discover(allow_network_scan=allow_network_scan, **network_scan_kwargs)
     if devices is None:
@@ -289,8 +253,8 @@ def scan_network(
     searching for Sonos devices. Multiple parallel threads are used to
     scan IP addresses in parallel for faster discovery.
 
-    Public and loopback IP ranges are excluded from the scan, and the scope of
-    the search can be controlled by setting a minimum netmask.
+    Public, loopback and link local IP ranges are excluded from the scan,
+    and the scope of the search can be controlled by setting a minimum netmask.
 
     Alternatively, a list of networks to scan can be provided.
 
@@ -380,14 +344,6 @@ def scan_network(
         _LOG.info("No Sonos zones discovered")
         return None
 
-    # Disable caching to prevent problems with the list of zones
-    # if there are multiple households
-    if multi_household:
-        original_cache_state = core.zone_group_state_shared_cache.enabled
-        if original_cache_state:
-            core.zone_group_state_shared_cache.enabled = False
-            _LOG.info("Disabled SoCo caching")
-
     # Collect SoCo instances
     zones = set()
     for ip_address in sonos_ip_addresses:
@@ -401,12 +357,6 @@ def scan_network(
         # all zones across all households
         if not multi_household:
             break
-
-    # Restore the original cache state if required
-    if multi_household:
-        if original_cache_state:
-            core.zone_group_state_shared_cache.enabled = True
-            _LOG.info("Re-enabled SoCo caching")
 
     _LOG.info(
         "Include_invisible: %s | multi_household: %s | %d Zones: %s",
@@ -475,16 +425,18 @@ def scan_network_get_household_ids(**network_scan_kwargs):
     return household_ids
 
 
-def scan_network_get_by_name(name, **network_scan_kwargs):
+def scan_network_get_by_name(name, household_id=None, **network_scan_kwargs):
     """Convenience function to use `scan_network` to find a zone
     by its name.
 
     Note that if there are multiple zones with the same name,
-    perhaps in different households, then only one of the zones
-    will be returned.
+    then only one of the zones will be returned. Optionally,
+    the search can be constrained to a specific household.
 
     Args:
         name (str): The name of the zone to find.
+        household_id (str, optional): Use this to find the zone in a specific
+             Sonos household.
         **network_scan_kwargs: Arguments for the `scan_network` function.
             See its docstring for details. (Note that the argument
             'multi_household' is forced to `True` when this function is
@@ -502,11 +454,50 @@ def scan_network_get_by_name(name, **network_scan_kwargs):
     if zones:
         for zone in zones:
             if zone.player_name == name:
-                matching_zone = zone
-                break
+                if household_id:
+                    if zone.household_id == household_id:
+                        matching_zone = zone
+                        break
+                else:
+                    matching_zone = zone
+                    break
 
     _LOG.info("Returning zone: %s", matching_zone)
     return matching_zone
+
+
+def scan_network_any_soco(household_id=None, **network_scan_kwargs):
+    """Convenience function to use `scan_network` to find any zone,
+    optionally specifying a Sonos household.
+
+    Args:
+        household_id (str, optional): Use this to find a zone in a specific
+            Sonos household.
+        **network_scan_kwargs: Arguments for the `scan_network` function.
+            See its docstring for details.
+
+    Returns:
+        SoCo: A `SoCo` instance representing the zone, or `None` if no
+        zone is found (or no zone is found that matches a supplied
+        household_id).
+    """
+
+    if household_id:
+        network_scan_kwargs["multi_household"] = True
+
+    zones = scan_network(include_invisible=False, **network_scan_kwargs)
+    any_zone = None
+    if zones:
+        if not household_id:
+            any_zone = zones.pop()
+        else:
+            for zone in zones:
+                if zone.household_id == household_id:
+                    any_zone = zone
+                    break
+
+    _LOG.info("Returning zone: %s", any_zone)
+    return any_zone
 
 
 def _find_ipv4_networks(min_netmask):
@@ -514,7 +505,7 @@ def _find_ipv4_networks(min_netmask):
 
     Helper function to return a set of IPv4 networks to which
     the network interfaces on this node are attached.
-    Exclude public and loopback network ranges.
+    Exclude public, loopback and link local network ranges.
 
     Args:
         min_netmask(int): The minimum netmask to be used.
@@ -534,8 +525,12 @@ def _find_ipv4_networks(min_netmask):
                 continue
 
             ipv4_network = ipaddress.ip_network(ifaddr_network.ip)
-            # Restrict to private networks and exclude loopback
-            if ipv4_network.is_private and not ipv4_network.is_loopback:
+            # Restrict to private networks, and exclude loopback and link local
+            if (
+                ipv4_network.is_private
+                and not ipv4_network.is_loopback
+                and not ipv4_network.is_link_local
+            ):
                 # Constrain the size of network that will be searched
                 netmask = ifaddr_network.network_prefix
                 if netmask < min_netmask:
@@ -554,6 +549,34 @@ def _find_ipv4_networks(min_netmask):
 
     _LOG.info("Set of networks to search: %s", str(ipv4_net_list))
     return ipv4_net_list
+
+
+def _find_ipv4_addresses():
+    """Discover and return all the host's IPv4 addresses.
+
+    Helper function to return a set of IPv4 addresses associated
+    with the network interfaces of this host. Loopback and link
+    local addresses are excluded.
+
+    Returns:
+        set: A set of IPv4 addresses (dotted decimal strings). Empty
+        set if there are no addresses found.
+    """
+
+    ipv4_addresses = set()
+    for adapter in ifaddr.get_adapters():
+        for ifaddr_network in adapter.ips:
+            try:
+                ipaddress.IPv4Network(ifaddr_network.ip)
+            except ValueError:
+                # Not an IPv4 address
+                continue
+            ipv4_network = ipaddress.ip_network(ifaddr_network.ip)
+            if not ipv4_network.is_loopback and not ipv4_network.is_link_local:
+                ipv4_addresses.add(ifaddr_network.ip)
+
+    _LOG.info("Set of attached IPs: %s", str(ipv4_addresses))
+    return ipv4_addresses
 
 
 def _check_ip_and_port(ip_address, port, timeout):

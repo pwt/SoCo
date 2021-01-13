@@ -97,13 +97,6 @@ class Vartype(namedtuple("VartypeBase", "datatype, default, list, range")):
         return self.datatype
 
 
-# A shared cache for ZoneGroupState. Each zone has the same info, so when a
-# SoCo instance is asked for group info, we can cache it and return it when
-# another instance is asked. To do this we need a cache to be shared between
-# instances
-zone_group_state_shared_cache = Cache()
-
-
 # pylint: disable=too-many-instance-attributes
 class Service(object):
     """A class representing a UPnP service.
@@ -468,7 +461,7 @@ class Service(object):
             ValueError: If the argument lists do not match the action
                 signature.
             `SoCoUPnPException`: if a SOAP error occurs.
-            `UnknownSoCoException`: if an unknonwn UPnP error occurs.
+            `UnknownSoCoException`: if an unknown UPnP error occurs.
             `requests.exceptions.HTTPError`: if an http error occurs.
 
         """
@@ -783,6 +776,10 @@ class MusicServices(Service):
     services."""
 
 
+class AudioIn(Service):
+    """Sonos audio in service, for functions related to RCA audio input."""
+
+
 class DeviceProperties(Service):
     """Sonos device properties service, for functions relating to zones, LED
     state, stereo pairs etc."""
@@ -796,12 +793,6 @@ class SystemProperties(Service):
 class ZoneGroupTopology(Service):
     """Sonos zone group topology service, for functions relating to network
     topology, diagnostics and updates."""
-
-    def GetZoneGroupState(self, *args, **kwargs):
-        """Overrides default handling to use the global shared zone group state
-        cache, unless another cache is specified."""
-        kwargs["cache"] = kwargs.get("cache", zone_group_state_shared_cache)
-        return self.send_command("GetZoneGroupState", *args, **kwargs)
 
 
 class GroupManagement(Service):
